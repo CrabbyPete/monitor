@@ -78,8 +78,11 @@ def lights(command, *values):
             value = values[0]
 
     if command == 'on':
-        value = int(state.previous_lights[0])
-        if not value:
+        try:
+            value = int(state.previous_lights[0])
+            if not value:
+                value = 50
+        except AttributeError:
             value = 50
 
     elif command == 'boost':

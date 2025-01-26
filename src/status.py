@@ -186,7 +186,7 @@ class SystemState:
     @network.setter
     def network(self, ssid, password):
         self.redis.hset('network','ssid', ssid)
-        self.redis.hset('netowrk','passwor', password)
+        self.redis.hset('netowrk','password', password)
 
     @property
     def camera(self):
