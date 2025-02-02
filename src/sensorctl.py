@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import os
 import time
+import arrow
 import pigpio
 import subprocess
 
@@ -9,7 +10,7 @@ from log        import log
 from status     import state
 
 MIN_DUTY = 0
-MAX_DUTY = 1000000
+MAX_DUTY = 255
 
 PUMP_CHANNEL = 24
 PUMP_FREQ = 10000
@@ -19,7 +20,7 @@ BUTTON_1_CHANNEL = 27
 BUTTON_2_CHANNEL = 22
 
 LED_CHANNEL = 12        # PWM LED channel
-LED_FREQUENCY = 80000
+LED_FREQUENCY = 10000
 
 IR_LED_CHANNEL = 6
 RED_LED_CHANNEL = 13
@@ -37,7 +38,7 @@ def get_serial():
     return serial
 
 
-def red_light(command):
+def red_led(command):
     """
     Turn on and off red light
     :param command: str 'on'|'off
@@ -45,6 +46,7 @@ def red_light(command):
     """
     value = 1 if command == 'on' else 0
     pig.write(RED_LED_CHANNEL, value)
+    state.red_led = value
 
 
 def ir_led(command):
@@ -55,6 +57,7 @@ def ir_led(command):
     """
     value = 1 if command == 'on' else 0
     pig.write(IR_LED_CHANNEL, value)
+    state.ir_led = value
 
 
 def lights(command, *values):
@@ -64,102 +67,89 @@ def lights(command, *values):
     :param values: option value for a given command
     :return:
     """
-    log.info("lights {} {}".format(command, values))
+    log.info(f"lights {command} {values}")
+    pig.set_PWM_frequency(LED_CHANNEL, LED_FREQUENCY)
 
-    # Current state has to be a percentage of the maximum duty cycle 100000.
-    value = 0
+    # Current state has to be a percentage of the maximum duty cycle 255.
     if values:
         if isinstance(values[0], str):
             try:
                 value = int(values[0])
             except TypeError:
-                value = 0
-        elif isinstance(values[0], int):
-            value = values[0]
+                value = 1
+        else:
+            value = int(values[0])
 
     if command == 'on':
-        try:
-            value = int(state.previous_lights[0])
-            if not value:
-                value = 50
-        except AttributeError:
-            value = 50
+        duty_cycle = int(MAX_DUTY/2)
 
     elif command == 'boost':
-        value = 100
+        duty_cycle = MAX_DUTY
 
     elif command == 'off':
-        state.previous_lights = state.lights[0]
-        value = 0
+        duty_cycle = 0
 
     elif command == 'adjust':
         # Adjust the current value by percent of current value # Note the app is sending this after an 'off'
         current, _ = state.lights
-        current = int(current) + value
-        value = min(max(current, 0), 100)
+        current = int(current) + values[0]
+        current = min(max(current,0),100)
+        duty_cycle = int( MAX_DUTY * ( current / 100 ))
 
     elif command == 'set':
-        # Set the value to set percentage of duty cylce
-        value = min(max(value, 0), 100)
+        value = min(max(values[0],0),100)
+        duty_cycle = int( MAX_DUTY * ( value / 100 ))
 
-    elif command == 'blink' and value > 0:
+    elif command == 'blink':
         # Blink the lights value times
         current_state = int(state.lights[0])
 
-        pig.set_PWM_dutycycle(LED_CHANNEL, 0)
-        for v in range(value):
-            pig.hardware_PWM(LED_CHANNEL, LED_FREQUENCY, MAX_DUTY)
+        for _ in range(value):
+            pig.set_PWM_dutycycle(LED_CHANNEL,MAX_DUTY)
             time.sleep(1)
 
-            pig.hardware_PWM(LED_CHANNEL, LED_FREQUENCY, MIN_DUTY)
+            pig.set_PWM_dutycycle(LED_CHANNEL, MIN_DUTY)
             time.sleep(1)
-        value = int(MAX_DUTY * current_state/100.)
-        pig.hardware_PWM(LED_CHANNEL, LED_FREQUENCY, value)
-        return current_state
 
-    elif command == 'transition' and len(values) == 3:
-        percent = int(values[1])
-        increments = int(values[2])
-        current = int(state.lights[0])
-        times = 0
+        duty_cycle = current_state
 
-        while True:
-            if percent > 0 and current >= value:
-                break
-            elif percent < 0 and current <= value:
-                break
+    pig.set_PWM_dutycycle(LED_CHANNEL, duty_cycle)
+    state.lights = duty_cycle
 
-            current += percent
+    return duty_cycle
 
-            # Don't go out of range
-            if current > 100:
-                current = 100
-            if current < 0:
-                current = 0
+def play(command, *values):
+    """
+    Ploy or stop sound from the speakers
+    :param command:
+    :param values:
+    :return:
+    """
 
-            lights('set', current)
-            log.info("Current:{}".format(current))
-
-            # Make sure you don't wind up in an infinite loop
-            time.sleep(increments)
-            times = times + 1
-            if times >= 100:
-                break
-        return current
-
-    current_state = int(state.lights[0])
-    state.lights = current_state
-
-    return current_state
+def microphone(command):
+    """
+    Turn on and off the microphone
+    :param command:
+    :return:
+    """
+    # Send audio output to process or socket
+    if command == 'on':
+        command = "arecord -D plughw:1 -c1 -r 48000 -f S32_LE -t wav -V mono -v file.wav"
+        ok = subprocess.run(command.split(), stderr=subprocess.PIPE, stdout=subprocess.PIPE)
+    else:
+        pass
 
 
-def motor():
+def motor(command):
     """
     Get the current water level
     :return:
     """
     # log.info("Reading water level")
-    pass
+    if command == 'on':
+        state.motor = 1
+    else:
+        state.motor = 0
 
 
 def i2c_scan():
@@ -178,7 +168,7 @@ def i2c_scan():
     return bus_addresses
 
 
-def tmp102(bus=1, address=0x48):
+def temperature(bus=1, address=0x48):
     """
     Read the tmp102 temperature and humidity sensor
     :param bus: I2C bus
@@ -200,7 +190,7 @@ def tmp102(bus=1, address=0x48):
     data[1] = data[1] | (0b10 << 6)
 
     # Write 4 Hz sampling back to CONFIG
-    pig.i2c_write_i2c_block_data(address, 0x01, data)
+    pig.i2c_write_i2c_block_data(handle, 0x01, data)
 
     _, val = pig.i2c_read_i2c_block_data(handle,0x00,2)
     temp_c = (val[0] << 4) | (val[1] >> 4)
@@ -209,11 +199,12 @@ def tmp102(bus=1, address=0x48):
     # Convert registers value to temperature (C)
     temp_c = temp_c * 0.0625
     pig.i2c_close(handle)
+    state.temperature = temp_c
     return temp_c
 
 
 # Keep track of microseconds elapsed since fall and rise
-tick_down = 0
+tick_down=[0,0]
 
 
 def button_callback(gpio, level, tick):
@@ -225,41 +216,41 @@ def button_callback(gpio, level, tick):
     :return:
     """
     global tick_down
+    button = 0 if gpio == BUTTON_1_CHANNEL else 1
+
     log.info("Button: {} {} {}".format(gpio,level,tick))
 
     # Falling button pushed
     if level == 0:
-        tick_down = tick
+        tick_down[button] = tick
 
     # Rising button released
     else:
-        ticks = tick - tick_down
-        log.info("Button ticks:{} {}".format(ticks, tick_down))
+        ticks = tick - tick_down[button]
+        log.info("Button ticks:{} {}".format(ticks, tick_down[button]))
 
         # Roll over if it went over the max tick level
         if ticks < 0:
             ticks = 4294967295 - ticks
 
-        # 8 second push, restart the network
-        if ticks > 8000000:
-
-            # Start the network switch process, make sure to kill it if its already running
-            # Stop it if it was already running and they hit the button again
-            commands = ("sudo systemctl stop network-switch.service",
-                        "sudo systemctl start network-switch.service")
-            for command in commands:
-                ok = subprocess.run(command.split(), stderr=subprocess.PIPE)
-                if ok.returncode:
-                    log.error("Error:{} trying to do:{}".format(ok.stderr, command))
-
         # .25 second push, toggle the lights
         elif ticks > 250000:
-            log.info('Button lights')
-            current_state, _ = state.lights
-            if not int(current_state):
-                lights('on')
+            if button == 0:
+                log.info('Button lights')
+                current_state, _ = state.lights
+                if not int(current_state):
+                    lights('on')
+                else:
+                    lights('off')
             else:
-                lights('off')
+                log.info('IR button')
+                current_state, _ = state.red_led
+                if not int(current_state):
+                    red_led('on')
+                    ir_led('on')
+                else:
+                    red_led('off')
+                    ir_led('off')
 
 
 def buttons():
@@ -333,14 +324,11 @@ if __name__ == "__main__":
 
     parser.add_argument('sensor',
                         choices=['lights',
-                                 'pump',
-                                 'camera',
-                                 'photos',
-                                 'water',
+                                 'red_led',
+                                 'ir_led',
                                  'temperature',
-                                 'pcb_temp',
                                  'scan',
-                                 'restore'
+                                 'buttons'
                                  ],
                         help='sensor to affect')
 
@@ -349,8 +337,18 @@ if __name__ == "__main__":
                         help="option parameter for lights")
 
     pargs = parser.parse_args()
+    if pargs.sensor == 'temperature':
+        temp_c = temperature()
+        temp_f = (temp_c * 1.8) + 32
+        print(f"Celcius:{temp_c} Fahrenheit:{temp_f}")
+
+    elif pargs.sensor == 'red_led':
+        red_led(*pargs.parameter)
+
+    elif pargs.sensor == 'ir_led':
+        ir_led(*pargs.parameter)
     
-    if pargs.sensor == 'lights':
+    elif pargs.sensor == 'lights':
         current_state = lights(*pargs.parameter)
         log.info("Current state of lights {}".format(current_state))
 
@@ -359,4 +357,7 @@ if __name__ == "__main__":
 
     elif pargs.sensor == 'cpu':
         cpu()
+
+    else:
+        buttons()
 

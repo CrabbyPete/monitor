@@ -22,10 +22,14 @@ class SystemState:
         self.redis.set('serial',fp.read().splitlines()[0])
 
         if not self.redis.get('version'):
-            self.redis.set('version','2.0')
+            self.redis.set('version','1.0')
 
         if not self.redis.get('timezone'):
             self.redis.set('timezone', 'America/New_York')
+
+        self.lights = 0
+        self.red_led = 0
+        self.ir_led = 0
 
     @property
     def timezone(self):
@@ -38,20 +42,6 @@ class SystemState:
         except:
             return None
 
-    def schedule(self, device, **kwargs):
-        """
-        Scheduled settings in the systemd timers for each device
-        :param device: str: defined by they systemd.timer eg. lights_on, lights_boost, lights_off, pump, camera
-        :param kwargs: list[str]: list of string defining the schedule as a system.timer value eg.['*-*-* 10:00:00']
-        :return:
-        """
-        settings = self.redis.hget('schedule',device)
-        configuration = json.loads(settings)
-        if kwargs:
-            for k,v in kwargs:
-                pass
-
-        return configuration
 
     def config(self, device, **kwargs):
         """
@@ -86,70 +76,45 @@ class SystemState:
         self.redis.hset('lights', 'time', arrow.now().format("YYYYMMDD HH:mm:ss"))
 
     @property
-    def pump(self):
-        return self.redis.hget('pump','state'), self.redis.hget('pump','time')
+    def red_led(self):
+        state = self.redis.hget('red_led','state')
+        time = self.redis.hget('red_led','time')
+        return state, time
 
-    @pump.setter
-    def pump(self, value):
-        self.redis.hset('pump', 'state', value)
-        self.redis.hset('pump', 'time', arrow.now().format("YYYYMMDD HH:mm:ss"))
-
-    @property
-    def power(self):
-        return self.redis.hget('power','state'), self.redis.hget('power','time')
-
-    @power.setter
-    def power(self, value):
-        self.redis.hset('power', 'state', value)
-        self.redis.hset('power', 'time', arrow.now().format("YYYYMMDD HH:mm:ss"))
+    @red_led.setter
+    def red_led(self, state):
+        self.redis.hset('red_led', 'state', state)
+        self.redis.hset('red_led', 'time', arrow.now().format("YYYYMMDD HH:mm:ss"))
 
     @property
-    def camera_one(self):
-        return self.redis.hget('camera_one','path'), self.redis.hget('camera_one','time')
+    def ir_led(self):
+        state = self.redis.hget('ir_led','state')
+        time = self.redis.hget('ir_led','time')
+        return state, time
 
-    @camera_one.setter
-    def camera_one(self, path):
+    @ir_led.setter
+    def ir_led(self, state):
+        self.redis.hset('ir_led', 'state', state)
+        self.redis.hset('ir_led', 'time', arrow.now().format("YYYYMMDD HH:mm:ss"))
+
+    @property
+    def camera(self):
+        return self.redis.hget('camera','path'), self.redis.hget('camera','time')
+
+    @camera.setter
+    def camera(self, path):
         self.redis.hset('camera_one','path',path)
         self.redis.hset('camera_one','time',arrow.now().format("YYYYMMDD HH:mm:ss"))
 
     @property
-    def camera_two(self):
-        return self.redis.hget('camera_one','path'), self.redis.hget('camera_one','time')
-
-    @camera_two.setter
-    def camera_two(self, path):
-        self.redis.hset('camera_two','path',path)
-        self.redis.hset('camera_two','time',arrow.now().format("YYYYMMDD HH:mm:ss"))
-
-    @property
-    def water(self):
-        return self.redis.hget('water','level'), self.redis.hget('water','time')
-
-    @water.setter
-    def water(self, level):
-        self.redis.hset('water','level', level)
-        self.redis.hset('water','time', arrow.now().format("YYYYMMDD HH:mm:ss"))
-
-    @property
     def temperature(self):
         t = self.redis.hget('temperature','temperature')
-        h = self.redis.hget('temperature','humidity')
-        return t,h,self.redis.hget('temperature','time')
+        return t, self.redis.hget('temperature','time')
 
     @temperature.setter
-    def temperature(self, values):
-        self.redis.hset('temperature','temperature', values[0])
-        self.redis.hset('temperature','humidity', values[1])
-        self.redis.hset('temperature','time',arrow.now().format("YYYYMMDD HH:mm:ss"))
-
-    @property
-    def pcb_temp(self):
-        return self.redis.hget('pcb_temp', 'temperature'), self.redis.hget('pcb_temp','time')
-
-    @pcb_temp.setter
-    def pcb_temp(self, temperature):
-        self.redis.hset('pcb_temp','temperature', temperature)
-        self.redis.hset('pcb_temp','time',arrow.now().format("YYYYMMDD HH:mm:ss"))
+    def temperature(self, value):
+        self.redis.hset('temperature','temperature', value)
+        self.redis.hset('temperature','time', arrow.now().format("YYYYMMDD HH:mm:ss"))
 
     @property
     def cpu(self):
@@ -211,16 +176,10 @@ class SystemState:
     def __repr__(self):
         status = {
             "temp": self.temperature[0],
-            "humidity": self.temperature[1],
-            "water_lvl": self.water[0],
             "light": self.lights[0],
-            "pump": self.pump[0],
-            "light_schedule": 1,
-            "pump_schedule": 1,
             "prev_light": 1,
-            "camera_status": 1,
-            "power": self.power[0],
-            "board": self.pcb_temp[0],
+            "network":self.network,
+            "serial":self.serial,
             "version":self.version,
             "timezone":self.timezone
         }
@@ -230,6 +189,7 @@ class SystemState:
 state = SystemState()
 
 if __name__ == "__main__":
+    import json
     print(state)
 
 
