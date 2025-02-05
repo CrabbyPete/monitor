@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 import os
 import time
-import arrow
-import pigpio
+import smbus2
 import subprocess
+import RPi.GPIO as GPIO
+
 
 # Local imports
 from log        import log
@@ -25,8 +26,11 @@ LED_FREQUENCY = 10000
 IR_LED_CHANNEL = 6
 RED_LED_CHANNEL = 13
 
-pig = pigpio.pi()
-
+GPIO.setwarnings(False)
+GPIO.setmode(GPIO.BCM)
+GPIO.setup(LED_CHANNEL, GPIO.OUT )
+GPIO.setup(IR_LED_CHANNEL, GPIO.OUT )
+GPIO.setup(RED_LED_CHANNEL, GPIO.OUT)
 
 def get_serial():
     """
@@ -45,7 +49,7 @@ def red_led(command):
     :return:
     """
     value = 1 if command == 'on' else 0
-    pig.write(RED_LED_CHANNEL, value)
+    GPIO.output(RED_LED_CHANNEL, value)
     state.red_led = value
 
 
@@ -56,7 +60,7 @@ def ir_led(command):
     :return:
     """
     value = 1 if command == 'on' else 0
-    pig.write(IR_LED_CHANNEL, value)
+    GPIO.output(IR_LED_CHANNEL, value)
     state.ir_led = value
 
 
@@ -68,15 +72,17 @@ def lights(command, *values):
     :return:
     """
     log.info(f"lights {command} {values}")
-    pig.set_PWM_frequency(LED_CHANNEL, LED_FREQUENCY)
+    pwm = GPIO.PWM(LED_CHANNEL, LED_FREQUENCY)
+    pwm.start(0)
 
     # Current state has to be a percentage of the maximum duty cycle 255.
+    value = 1
     if values:
         if isinstance(values[0], str):
             try:
                 value = int(values[0])
             except TypeError:
-                value = 1
+                log.error(f"Type error in lights for {values}")
         else:
             value = int(values[0])
 
@@ -105,26 +111,30 @@ def lights(command, *values):
         current_state = int(state.lights[0])
 
         for _ in range(value):
-            pig.set_PWM_dutycycle(LED_CHANNEL,MAX_DUTY)
+            pwm.ChangeDutyCycle(100)
             time.sleep(1)
 
-            pig.set_PWM_dutycycle(LED_CHANNEL, MIN_DUTY)
+            pwm.ChangeDutyCycle(0)
             time.sleep(1)
 
         duty_cycle = current_state
 
-    pig.set_PWM_dutycycle(LED_CHANNEL, duty_cycle)
+    pwm.ChangeDutyCycle(duty_cycle)
     state.lights = duty_cycle
 
     return duty_cycle
 
-def play(command, *values):
+
+def speakers(command, *values):
     """
     Ploy or stop sound from the speakers
     :param command:
     :param values:
     :return:
     """
+    command = "rplay {}"
+    ok = subprocess.run(command.split(), stderr=subprocess.PIPE, stdout=subprocess.PIPE)
+
 
 def microphone(command):
     """
@@ -152,19 +162,16 @@ def motor(command):
         state.motor = 0
 
 
-def i2c_scan():
-    """
-    Scan the I2C bus and see what's there
-    """
+def scan_i2c_bus(bus_number=1):
+    """Scans the I2C bus for devices."""
     bus_addresses = []
-    for bus in range(2):
-        for x in range(0x08, 0x79):
-            handle = pig.i2c_open(bus, x)
-            if handle:
-                s = pig.i2c_read_byte(handle)
-                if s >= 0:
-                    bus_addresses.append(x)
-                pig.i2c_close(handle)
+    with smbus2.SMBus(bus_number) as bus:
+        for address in range(0x08, 0x79):
+            try:
+                bus.read_byte(address)
+                bus_addresses.append(address)
+            except Exception:
+                pass
     return bus_addresses
 
 
@@ -180,25 +187,24 @@ def temperature(bus=1, address=0x48):
             val = val - (1 << bits)
         return val
 
-    handle = pig.i2c_open(bus, address)
+    with smbus2.SMBus(1) as bus:
 
-    # Read the configuration block
-    _, data = pig.i2c_read_i2c_block_data(handle, 0x01, 2)
+        # Read the configuration block
+        data = bus.read_i2c_block_data(address, 0x01, 2)
 
-    # Set to 4 Hz sampling (CR1, CR0 = 0b10)
-    data[1] = data[1] & 0b00111111
-    data[1] = data[1] | (0b10 << 6)
+        # Set to 4 Hz sampling (CR1, CR0 = 0b10)
+        data[1] = data[1] & 0b00111111
+        data[1] = data[1] | (0b10 << 6)
 
-    # Write 4 Hz sampling back to CONFIG
-    pig.i2c_write_i2c_block_data(handle, 0x01, data)
+        # Write 4 Hz sampling back to CONFIG
+        bus.write_i2c_block_data(address, 0x01, data)
 
-    _, val = pig.i2c_read_i2c_block_data(handle,0x00,2)
-    temp_c = (val[0] << 4) | (val[1] >> 4)
-    temp_c = twos_comp(temp_c, 12)
+        val = bus.read_i2c_block_data(address, 0x00, 2)
+        temp_c = (val[0] << 4) | (val[1] >> 4)
+        temp_c = twos_comp(temp_c, 12)
 
     # Convert registers value to temperature (C)
     temp_c = temp_c * 0.0625
-    pig.i2c_close(handle)
     state.temperature = temp_c
     return temp_c
 
@@ -206,69 +212,25 @@ def temperature(bus=1, address=0x48):
 # Keep track of microseconds elapsed since fall and rise
 tick_down=[0,0]
 
-
-def button_callback(gpio, level, tick):
-    """
-    Call back for a button push, debounce
-    :param gpio: the pin pushed
-    :param level: 0-falling 1-rising
-    :param tick: millisec from push, wraps at 4294967295
-    :return:
-    """
-    global tick_down
-    button = 0 if gpio == BUTTON_1_CHANNEL else 1
-
-    log.info("Button: {} {} {}".format(gpio,level,tick))
-
-    # Falling button pushed
-    if level == 0:
-        tick_down[button] = tick
-
-    # Rising button released
-    else:
-        ticks = tick - tick_down[button]
-        log.info("Button ticks:{} {}".format(ticks, tick_down[button]))
-
-        # Roll over if it went over the max tick level
-        if ticks < 0:
-            ticks = 4294967295 - ticks
-
-        # .25 second push, toggle the lights
-        elif ticks > 250000:
-            if button == 0:
-                log.info('Button lights')
-                current_state, _ = state.lights
-                if not int(current_state):
-                    lights('on')
-                else:
-                    lights('off')
-            else:
-                log.info('IR button')
-                current_state, _ = state.red_led
-                if not int(current_state):
-                    red_led('on')
-                    ir_led('on')
-                else:
-                    red_led('off')
-                    ir_led('off')
+def button_callback(channel):
+    tick =  0 if channel == BUTTON_1_CHANNEL else 1
+    if not GPIO.input(channel):
+        print('d')
+        tick_down[tick] = time.time()
+    elif tick_down[tick]:
+        print('u')
+        hold = time.time() - tick_down[tick]
+        print(f"channel:{channel} time: {int(hold)}")
 
 
 def buttons():
-    """
-    Set up the button use a call back
-    :return: Never
-    """
-    log.info('button')
-    pig.set_mode(BUTTON_1_CHANNEL, pigpio.INPUT)
-    pig.set_pull_up_down(BUTTON_1_CHANNEL, pigpio.PUD_UP)
-    pig.callback(BUTTON_1_CHANNEL, pigpio.EITHER_EDGE, button_callback)
-
-    pig.set_mode(BUTTON_2_CHANNEL, pigpio.INPUT)
-    pig.set_pull_up_down(BUTTON_2_CHANNEL, pigpio.PUD_UP)
-    pig.callback(BUTTON_2_CHANNEL, pigpio.EITHER_EDGE, button_callback)
-
+    GPIO.setup(BUTTON_1_CHANNEL, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+    GPIO.setup(BUTTON_2_CHANNEL, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+    GPIO.add_event_detect(BUTTON_1_CHANNEL, GPIO.BOTH, callback=button_callback, bouncetime=500)
+    GPIO.add_event_detect(BUTTON_2_CHANNEL, GPIO.BOTH, callback=button_callback, bouncetime=500)
     while True:
-        time.sleep(.1)
+        time.sleep(1)
+    GPIO.remove_event_detect(channel)
 
 
 def cpu():

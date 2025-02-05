@@ -1,5 +1,4 @@
 import os
-import json
 import redis
 import arrow
 
@@ -30,6 +29,8 @@ class SystemState:
         self.lights = 0
         self.red_led = 0
         self.ir_led = 0
+        self.microphone = 0
+        self.speakers = 0
 
     @property
     def timezone(self):
