@@ -128,12 +128,16 @@ def lights(command, *values):
 def speakers(command, *values):
     """
     Ploy or stop sound from the speakers
-    :param command:
-    :param values:
+    :param command: 'play' or 'stop
+    :param values: str: name of file to play
     :return:
     """
-    command = "rplay {}"
-    ok = subprocess.run(command.split(), stderr=subprocess.PIPE, stdout=subprocess.PIPE)
+    if command == 'play':
+        command = f"aplay {values[0]}"
+        ok = subprocess.run(command.split(), stderr=subprocess.PIPE, stdout=subprocess.PIPE)
+        if ok:
+            if ok.returncode:
+                print(ok.stderr)
 
 
 def microphone(command):
@@ -228,10 +232,6 @@ def buttons():
     GPIO.setup(BUTTON_2_CHANNEL, GPIO.IN, pull_up_down=GPIO.PUD_UP)
     GPIO.add_event_detect(BUTTON_1_CHANNEL, GPIO.BOTH, callback=button_callback, bouncetime=500)
     GPIO.add_event_detect(BUTTON_2_CHANNEL, GPIO.BOTH, callback=button_callback, bouncetime=500)
-    while True:
-        time.sleep(1)
-    GPIO.remove_event_detect(channel)
-
 
 def cpu():
     """
@@ -289,6 +289,7 @@ if __name__ == "__main__":
                                  'red_led',
                                  'ir_led',
                                  'temperature',
+                                 'speakers',
                                  'scan',
                                  'buttons'
                                  ],
@@ -313,6 +314,10 @@ if __name__ == "__main__":
     elif pargs.sensor == 'lights':
         current_state = lights(*pargs.parameter)
         log.info("Current state of lights {}".format(current_state))
+
+    elif pargs.sensor == 'speakers':
+        HOME = os.path.dirname(os.path.realpath(__file__))
+        speakers('play',os.path.join(HOME,'sample-15s.wav'))
 
     elif pargs.sensor == 'scan':
         print(i2c_scan())

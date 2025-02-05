@@ -1,3 +1,4 @@
+import os
 import time
 
 import sensorctl
@@ -7,6 +8,7 @@ from threading  import Thread
 from log        import log
 from status     import state
 
+HOME = os.path.dirname(os.path.realpath(__file__))
 
 class Button(Thread):
     """
@@ -17,6 +19,8 @@ class Button(Thread):
         log.info("Starting button")
         try:
             sensorctl.buttons()
+            while True:
+                time.sleep(1)
         except Exception as e:
             log.error("Error {} on button".format(str(e)))
 
@@ -26,6 +30,8 @@ def main():
     Main loop which starts multiple threads
     :return:
     """
+    sensorctl.ir_led('off')
+    sensorctl.red_led('off')
     sensorctl.lights('blink', 3)
     log.info(f"Current temperature:{sensorctl.temperature()}")
 
