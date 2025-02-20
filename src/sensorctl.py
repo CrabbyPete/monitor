@@ -5,32 +5,32 @@ import smbus2
 import subprocess
 import RPi.GPIO as GPIO
 
+from pymodbus.client import ModbusSerialClient
 
 # Local imports
 from log        import log
 from status     import state
 
 MIN_DUTY = 0
-MAX_DUTY = 255
-
-PUMP_CHANNEL = 24
-PUMP_FREQ = 10000
-PUMP_DUTY = 126         # Percentage of 256 126 ~= 50%
+MAX_DUTY = 100
+MOTOR_CHANNEL = '/dev/ttyUSB0'
 
 BUTTON_1_CHANNEL = 27
 BUTTON_2_CHANNEL = 22
 
 LED_CHANNEL = 12        # PWM LED channel
 LED_FREQUENCY = 10000
-
 IR_LED_CHANNEL = 6
 RED_LED_CHANNEL = 13
+HOME = os.path.dirname(os.path.realpath(__file__))
 
 GPIO.setwarnings(False)
 GPIO.setmode(GPIO.BCM)
+
 GPIO.setup(LED_CHANNEL, GPIO.OUT )
 GPIO.setup(IR_LED_CHANNEL, GPIO.OUT )
 GPIO.setup(RED_LED_CHANNEL, GPIO.OUT)
+
 
 def get_serial():
     """
@@ -63,6 +63,8 @@ def ir_led(command):
     GPIO.output(IR_LED_CHANNEL, value)
     state.ir_led = value
 
+pwm = GPIO.PWM(LED_CHANNEL, LED_FREQUENCY)
+pwm.start(0)
 
 def lights(command, *values):
     """
@@ -72,11 +74,8 @@ def lights(command, *values):
     :return:
     """
     log.info(f"lights {command} {values}")
-    pwm = GPIO.PWM(LED_CHANNEL, LED_FREQUENCY)
-    pwm.start(0)
 
     # Current state has to be a percentage of the maximum duty cycle 255.
-    value = 1
     if values:
         if isinstance(values[0], str):
             try:
@@ -87,7 +86,7 @@ def lights(command, *values):
             value = int(values[0])
 
     if command == 'on':
-        duty_cycle = int(MAX_DUTY/2)
+        duty_cycle = 50
 
     elif command == 'boost':
         duty_cycle = MAX_DUTY
@@ -119,6 +118,7 @@ def lights(command, *values):
 
         duty_cycle = current_state
 
+    print(f"duty_cycle:{duty_cycle}")
     pwm.ChangeDutyCycle(duty_cycle)
     state.lights = duty_cycle
 
@@ -133,7 +133,11 @@ def speakers(command, *values):
     :return:
     """
     if command == 'play':
-        command = f"aplay {values[0]}"
+        value = values[0]
+        if not value:
+            value = os.path.join(HOME,'lullaby.wav')
+
+        command = f"aplay {value}"
         ok = subprocess.run(command.split(), stderr=subprocess.PIPE, stdout=subprocess.PIPE)
         if ok:
             if ok.returncode:
@@ -148,25 +152,49 @@ def microphone(command):
     """
     # Send audio output to process or socket
     if command == 'on':
-        command = "arecord -D plughw:1 -c1 -r 48000 -f S32_LE -t wav -V mono -v file.wav"
+        command = "arecord -D plughw:0 -c1 -r 48000 -f S32_LE -t wav -V mono -v file.wav"
         ok = subprocess.run(command.split(), stderr=subprocess.PIPE, stdout=subprocess.PIPE)
     else:
         pass
 
+def record(command,*options):
+    """
+    Manage recording
+    :param command: str: on or off
+    :param options: n
+    :return:
+    """
+    pass
 
-def motor(command):
+
+def motor(command, *speed):
     """
     Get the current water level
     :return:
     """
-    # log.info("Reading water level")
+    try:
+        client = ModbusSerialClient(MOTOR_CHANNEL,
+                                    baudrate= 9600,
+                                    bytesize=8,
+                                    parity="N",
+                                    stopbits=1)
+        client.connect()
+    except Exception as e:
+        log.error(f"Error:{e} trying to connect to motor")
+        return
+
     if command == 'on':
-        state.motor = 1
-    else:
-        state.motor = 0
+        ok = client.write_register(0x8000,0x0902)
+        if speed[0]:
+            ok =  client.write_register(0x8005, speed)
+    elif command == 'off':
+        ok = client.write_register(0x8000,0x0A02)
+    elif command == 'reverse':
+        ok = client.write_register(0x8000,0x0B02)
+    client.close()
 
 
-def scan_i2c_bus(bus_number=1):
+def i2c_scan(bus_number=1):
     """Scans the I2C bus for devices."""
     bus_addresses = []
     with smbus2.SMBus(bus_number) as bus:
@@ -179,7 +207,7 @@ def scan_i2c_bus(bus_number=1):
     return bus_addresses
 
 
-def temperature(bus=1, address=0x48):
+def temperature(bus=1, address=0x49):
     """
     Read the tmp102 temperature and humidity sensor
     :param bus: I2C bus
@@ -217,21 +245,51 @@ def temperature(bus=1, address=0x48):
 tick_down=[0,0]
 
 def button_callback(channel):
-    tick =  0 if channel == BUTTON_1_CHANNEL else 1
-    if not GPIO.input(channel):
+    global tick_down
+
+    up = GPIO.input(channel)
+    print(channel, up)
+
+    # Keep track of the time for each button
+    tick:int =  0 if channel == BUTTON_1_CHANNEL else 1
+
+    # If the button is down, record starting time until it comes up
+    if not up:
         print('d')
         tick_down[tick] = time.time()
-    elif tick_down[tick]:
+    else:
         print('u')
         hold = time.time() - tick_down[tick]
-        print(f"channel:{channel} time: {int(hold)}")
+        if channel == BUTTON_1_CHANNEL:
+            if hold > 1.:
+                if not int(state.lights[0]):
+                    lights('on')
+                else:
+                    lights('off')
+        else:
+            print("play")
+            pass
+
 
 
 def buttons():
+    """
+    Set up the buttons. Make sure the process that calls this waits forever
+    :return: None
+    """
     GPIO.setup(BUTTON_1_CHANNEL, GPIO.IN, pull_up_down=GPIO.PUD_UP)
     GPIO.setup(BUTTON_2_CHANNEL, GPIO.IN, pull_up_down=GPIO.PUD_UP)
-    GPIO.add_event_detect(BUTTON_1_CHANNEL, GPIO.BOTH, callback=button_callback, bouncetime=500)
-    GPIO.add_event_detect(BUTTON_2_CHANNEL, GPIO.BOTH, callback=button_callback, bouncetime=500)
+
+    try:
+        GPIO.add_event_detect(BUTTON_1_CHANNEL, GPIO.BOTH, callback=button_callback, bouncetime=500)
+    except Exception as e:
+        log.error(f"Error:{e} on {BUTTON_1_CHANNEL}")
+    try:
+        GPIO.add_event_detect(BUTTON_2_CHANNEL, GPIO.BOTH, callback=button_callback, bouncetime=500)
+    except Exception as e:
+        log.error(f"Error:{e} on {BUTTON_2_CHANNEL}")
+
+
 
 def cpu():
     """
@@ -312,12 +370,14 @@ if __name__ == "__main__":
         ir_led(*pargs.parameter)
     
     elif pargs.sensor == 'lights':
-        current_state = lights(*pargs.parameter)
-        log.info("Current state of lights {}".format(current_state))
+        lights(*pargs.parameter)
+        log.info("Current state of lights {}".format(state.lights))
 
     elif pargs.sensor == 'speakers':
-        HOME = os.path.dirname(os.path.realpath(__file__))
-        speakers('play',os.path.join(HOME,'sample-15s.wav'))
+        speakers('play',os.path.join(HOME,'lullaby.wav'))
+
+    elif pargs.sensor == 'microphone':
+        microphone('on')
 
     elif pargs.sensor == 'scan':
         print(i2c_scan())
@@ -327,4 +387,3 @@ if __name__ == "__main__":
 
     else:
         buttons()
-
