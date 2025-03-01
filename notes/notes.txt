@@ -1,0 +1,39 @@
+How to build:
+
+1. Install Bullseye 64bit Lite OS
+2. sudo apt update, sudo apt upgrade
+3. copy config.txt
+4. copy /etc/asound.conf
+
+
+Audio:
+    with no asound.conf: # volume is very low lasts 2 seconds
+    arecord -f S32_LE -D hw:0,0 -c 2 -r 48000 -d 2 test.wav
+
+
+    Stream audio to speakers
+    gst-launch-1.0 alsasrc device=hw:0 ! autoaudiosink
+    gst-launch-1.0 alsasrc device=hw:0 ! volume volume=3.0 ! autoaudiosink
+
+    Audio only to VLC
+    gst-launch-1.0 alsasrc device=hw:1,0 ! mulawenc ! rtppcmupay ! udpsink host=224.1.1.1 auto-multicast=true port=5000
+    Now VLC works going to rtp://224.1.1.1:5000 and has the correct codec that I wanted.
+
+
+Install gstream python
+
+    sudo apt install libcairo2-dev pkg-config python3-dev
+    pip install pycairo
+    pip install PyGObject
+
+To add awswebrtcsink
+    https://gitlab.freedesktop.org/gstreamer/gst-plugins-rs/-/blob/main/net/webrtc/README.md#using-the-aws-kvs-signaller
+
+
+Links:
+https://learn.adafruit.com/adafruit-max98357-i2s-class-d-mono-amp/raspberry-pi-wiring
+https://www.raspberrypi.com/documentation/computers/camera_software.html
+https://sourceforge.net/p/raspberry-gpio-python/wiki
+https://www.linkedin.com/pulse/streaming-camera-video-aws-kinesis-streams-using-python-kashif-ayub-map9f/
+https://docs.arducam.com/Raspberry-Pi-Camera/Low-Light/quick-start/#native-camera
+https://github.com/dave-malone/aws-kvs-webrtc-demo-for-raspberry-pi

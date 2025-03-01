@@ -5,9 +5,10 @@ import inspect
 
 
 log = logging.getLogger('crib')
-log.setLevel(logging.DEBUG)
+log.setLevel(logging.INFO)
+
 handler = logging.StreamHandler(sys.stdout)
-log_format = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+log_format = logging.Formatter('[%(asctime)s] {%(filename)s:%(lineno)d} %(levelname)s - %(message)s','%m-%d %H:%M:%S')
 handler.setFormatter(log_format)
 log.addHandler(handler)
 

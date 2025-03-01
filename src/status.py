@@ -31,6 +31,8 @@ class SystemState:
         self.ir_led = 0
         self.microphone = 0
         self.speakers = 0
+        self.camera = 0
+        self.motor = [0,0]
 
     @property
     def timezone(self):
@@ -118,6 +120,16 @@ class SystemState:
         self.redis.hset('temperature','time', arrow.now().format("YYYYMMDD HH:mm:ss"))
 
     @property
+    def motor(self):
+        return self.redis.hget('motor','state'), self.redis.hget('motor','speed')
+
+    @motor.setter
+    def motor(self, values):
+        self.redis.hset('motor', 'state', values[0])
+        self.redis.hset('motor', 'speed', values[1])
+        self.redis.hset('motor', 'time', arrow.now().format("YYYYMMDD HH:mm:ss"))
+
+    @property
     def cpu(self):
         return self.redis.hget('cpu', 'temperature'), self.redis.hget('cpu', 'time')
 
@@ -150,17 +162,9 @@ class SystemState:
         return(self.redis.hget('network','ssid'), self.redis.hget('network','password'))
 
     @network.setter
-    def network(self, ssid, password):
-        self.redis.hset('network','ssid', ssid)
-        self.redis.hset('netowrk','password', password)
-
-    @property
-    def camera(self):
-        return self.redis.get('camera')
-
-    @camera.setter
-    def camera(self,value=arrow.now().format('YYYYMMDD_HHmm')):
-        self.redis.set('camera', value)
+    def network(self, value):
+        self.redis.hset('network','ssid', value[0])
+        self.redis.hset('netowrk','password', value[1])
 
     @property
     def device_id(self):
@@ -188,6 +192,7 @@ class SystemState:
 
 
 state = SystemState()
+
 
 if __name__ == "__main__":
     import json

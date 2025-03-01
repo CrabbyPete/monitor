@@ -2,18 +2,18 @@
 import os
 import time
 import smbus2
+import psutil
 import subprocess
 import RPi.GPIO as GPIO
-
-from pymodbus.client import ModbusSerialClient
 
 # Local imports
 from log        import log
 from status     import state
+from bare485    import Modbus
 
 MIN_DUTY = 0
 MAX_DUTY = 100
-MOTOR_CHANNEL = '/dev/ttyUSB0'
+MOTOR_CHANNEL = '/dev/ttyS0' # If you uses the USB use this /dev/ttyUSB0'
 
 BUTTON_1_CHANNEL = 27
 BUTTON_2_CHANNEL = 22
@@ -22,6 +22,8 @@ LED_CHANNEL = 12        # PWM LED channel
 LED_FREQUENCY = 10000
 IR_LED_CHANNEL = 6
 RED_LED_CHANNEL = 13
+SPEAKERS = 23
+
 HOME = os.path.dirname(os.path.realpath(__file__))
 
 GPIO.setwarnings(False)
@@ -30,6 +32,7 @@ GPIO.setmode(GPIO.BCM)
 GPIO.setup(LED_CHANNEL, GPIO.OUT )
 GPIO.setup(IR_LED_CHANNEL, GPIO.OUT )
 GPIO.setup(RED_LED_CHANNEL, GPIO.OUT)
+GPIO.setup(SPEAKERS, GPIO.OUT)
 
 
 def get_serial():
@@ -62,9 +65,12 @@ def ir_led(command):
     value = 1 if command == 'on' else 0
     GPIO.output(IR_LED_CHANNEL, value)
     state.ir_led = value
+    return(value)
+
 
 pwm = GPIO.PWM(LED_CHANNEL, LED_FREQUENCY)
 pwm.start(0)
+
 
 def lights(command, *values):
     """
@@ -118,7 +124,7 @@ def lights(command, *values):
 
         duty_cycle = current_state
 
-    print(f"duty_cycle:{duty_cycle}")
+    # print(f"duty_cycle:{duty_cycle}")
     pwm.ChangeDutyCycle(duty_cycle)
     state.lights = duty_cycle
 
@@ -132,16 +138,27 @@ def speakers(command, *values):
     :param values: str: name of file to play
     :return:
     """
-    if command == 'play':
-        value = values[0]
-        if not value:
-            value = os.path.join(HOME,'lullaby.wav')
+    enable = GPIO.input(SPEAKERS)
+    log.info(f"Speakers:{enable}")
+    GPIO.output(SPEAKERS, 1)
+    if not values:
+        tunes = ['lullaby.wav']
+    else:
+        tunes = list(values[0])
 
-        command = f"aplay {value}"
-        ok = subprocess.run(command.split(), stderr=subprocess.PIPE, stdout=subprocess.PIPE)
-        if ok:
+    if command == 'play':
+        ok = False
+        for tune in tunes:
+            value = os.path.join(HOME, tune)
+            command = f"aplay {value}"
+            ok = subprocess.Popen(command.split(), stderr=subprocess.PIPE, stdout=subprocess.PIPE)
             if ok.returncode:
-                print(ok.stderr)
+                log.error(f"Error:{ok.returncode} running {command}")
+        return ok
+
+    elif command == 'stop':
+        pass
+
 
 
 def microphone(command):
@@ -152,10 +169,11 @@ def microphone(command):
     """
     # Send audio output to process or socket
     if command == 'on':
-        command = "arecord -D plughw:0 -c1 -r 48000 -f S32_LE -t wav -V mono -v file.wav"
+        command = "arecord -D plughw:0 -c1 -r 48000 -f S32_LE -t wav file.wav"
         ok = subprocess.run(command.split(), stderr=subprocess.PIPE, stdout=subprocess.PIPE)
     else:
         pass
+
 
 def record(command,*options):
     """
@@ -173,26 +191,29 @@ def motor(command, *speed):
     :return:
     """
     try:
-        client = ModbusSerialClient(MOTOR_CHANNEL,
-                                    baudrate= 9600,
-                                    bytesize=8,
-                                    parity="N",
-                                    stopbits=1)
-        client.connect()
+        sm = Modbus(MOTOR_CHANNEL)
     except Exception as e:
         log.error(f"Error:{e} trying to connect to motor")
-        return
+        return False
+
+    speed = sm.get_speed()
+    on_off = state.motor[0]
 
     if command == 'on':
-        ok = client.write_register(0x8000,0x0902)
-        if speed[0]:
-            ok =  client.write_register(0x8005, speed)
-    elif command == 'off':
-        ok = client.write_register(0x8000,0x0A02)
-    elif command == 'reverse':
-        ok = client.write_register(0x8000,0x0B02)
-    client.close()
+        ok = sm.start()
+        on_off = 'on'
 
+    elif command == 'off':
+        ok = sm.stop()
+        on_off = 'off'
+
+    elif command == 'reverse':
+        sm.reverse()
+
+    elif command == 'speed':
+        sm.speed(speed)
+
+    state.motor(on_off, speed)
 
 def i2c_scan(bus_number=1):
     """Scans the I2C bus for devices."""
@@ -349,7 +370,10 @@ if __name__ == "__main__":
                                  'temperature',
                                  'speakers',
                                  'scan',
-                                 'buttons'
+                                 'buttons',
+                                 'scan',
+                                 'cpu',
+                                 'wifi'
                                  ],
                         help='sensor to affect')
 
@@ -359,7 +383,12 @@ if __name__ == "__main__":
 
     pargs = parser.parse_args()
     if pargs.sensor == 'temperature':
-        temp_c = temperature()
+        if pargs.parameter:
+            bus = int(pargs.parameter[0])
+            address = int(pargs.parameter[1],16)
+            temp_c = temperature(bus,address)
+        else:
+            temp_c = temperature()
         temp_f = (temp_c * 1.8) + 32
         print(f"Celcius:{temp_c} Fahrenheit:{temp_f}")
 
@@ -374,7 +403,15 @@ if __name__ == "__main__":
         log.info("Current state of lights {}".format(state.lights))
 
     elif pargs.sensor == 'speakers':
-        speakers('play',os.path.join(HOME,'lullaby.wav'))
+        #speakers('play',os.path.join(HOME,'lullaby.wav'))
+        job = speakers('play')
+        job = psutil.Process(job.pid)
+        while True:
+            if not job.status() in ('running','sleeping'):
+                break
+            time.sleep(1)
+        print("Done playing")
+
 
     elif pargs.sensor == 'microphone':
         microphone('on')
@@ -383,7 +420,7 @@ if __name__ == "__main__":
         print(i2c_scan())
 
     elif pargs.sensor == 'cpu':
-        cpu()
+        print(f"CPU Temperature:{cpu()}")
 
     else:
         buttons()

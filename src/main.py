@@ -7,6 +7,7 @@ from threading  import Thread
 
 from log        import log
 from status     import state
+from iot_server import thing_shadow
 
 HOME = os.path.dirname(os.path.realpath(__file__))
 
@@ -25,6 +26,22 @@ class Button(Thread):
             log.error("Error {} on button".format(str(e)))
 
 
+class Shadow(Thread):
+    """
+    Start the AWS Shadow service
+    """
+    def run(self):
+        log.info("Starting shadow service")
+        try:
+            thing_shadow()
+            while True:
+                time.sleep(1)
+
+        except Exception as e:
+            log.error("Error {} on button".format(str(e)))
+
+
+
 def main():
     """
     Main loop which starts multiple threads
@@ -39,7 +56,10 @@ def main():
     button = Button()
     button.start()
 
-    jobs = [button]
+    shadow = Shadow()
+    shadow.start()
+
+    jobs = [button, shadow]
     while True:
 
         # Check each job in the case it stops for some reason, and if not restart it
@@ -54,7 +74,9 @@ def main():
                 if jn == 0:
                     log.info("Restarting Button")
                     jobs[jn] = Button()
-
+                if jn == 1:
+                    log.info("Restarting Shadow")
+                    jobs[jn] = Shadow()
                 jobs[jn].start()
                 break
         time.sleep(5)
