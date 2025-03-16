@@ -6,7 +6,6 @@ import sensorctl
 from threading  import Thread
 
 from log        import log
-from status     import state
 from iot_server import thing_shadow
 
 HOME = os.path.dirname(os.path.realpath(__file__))

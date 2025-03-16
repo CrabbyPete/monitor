@@ -1,5 +1,3 @@
-import json
-
 import sensorctl
 from status import state
 
